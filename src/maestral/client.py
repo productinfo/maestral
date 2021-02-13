@@ -68,10 +68,12 @@ from .errors import (
     NotLinkedError,
     InvalidDbidError,
     SharedLinkError,
+    DataCorruptionError,
 )
 from .config import MaestralState
 from .constants import DROPBOX_APP_KEY
 from .utils import natural_size, chunks, clamp
+from .utils.content_hasher import DropboxContentHasher, StreamHasher
 
 if TYPE_CHECKING:
     from .sync import SyncEvent
@@ -469,12 +471,22 @@ class DropboxClient:
 
             chunksize = 2 ** 13
 
+            hasher = DropboxContentHasher()
+
             with open(local_path, "wb") as f:
+
+                wrapped_f = StreamHasher(f, hasher)
+
                 with contextlib.closing(http_resp):
                     for c in http_resp.iter_content(chunksize):
-                        f.write(c)
+                        wrapped_f.write(c)
                         if sync_event:
-                            sync_event.completed = f.tell()
+                            sync_event.completed = wrapped_f.tell()
+
+        local_hash = hasher.hexdigest()
+
+        if md.content_hash != local_hash:
+            raise DataCorruptionError("Data corrupted", "Please retry download.")
 
         # dropbox SDK provides naive datetime in UTC
         client_mod = md.client_modified.replace(tzinfo=timezone.utc)
@@ -518,22 +530,32 @@ class DropboxClient:
             mtime = osp.getmtime(local_path)
             mtime_dt = datetime.utcfromtimestamp(mtime)
 
+            hasher = DropboxContentHasher()
+
             if size <= chunk_size:
+
                 with open(local_path, "rb") as f:
+
+                    wrapped_f = StreamHasher(f, hasher)
+
                     md = self.dbx.files_upload(
-                        f.read(), dbx_path, client_modified=mtime_dt, **kwargs
+                        wrapped_f.read(), dbx_path, client_modified=mtime_dt, **kwargs
                     )
                     if sync_event:
-                        sync_event.completed = f.tell()
-                return md
+                        sync_event.completed = wrapped_f.tell()
+
             else:
                 # Note: We currently do not support resuming interrupted uploads.
                 # Dropbox keeps upload sessions open for 48h so this could be done in
                 # the future.
+
                 with open(local_path, "rb") as f:
-                    data = f.read(chunk_size)
+
+                    wrapped_f = StreamHasher(f, hasher)
+
+                    data = wrapped_f.read(chunk_size)
                     session_start = self.dbx.files_upload_session_start(data)
-                    uploaded = f.tell()
+                    uploaded = wrapped_f.tell()
 
                     cursor = files.UploadSessionCursor(
                         session_id=session_start.session_id, offset=uploaded
@@ -548,21 +570,23 @@ class DropboxClient:
                     while True:
                         try:
 
-                            if size - f.tell() <= chunk_size:
+                            if size - wrapped_f.tell() <= chunk_size:
                                 # Wrap up upload session and return metadata.
-                                data = f.read(chunk_size)
+                                data = wrapped_f.read(chunk_size)
                                 md = self.dbx.files_upload_session_finish(
                                     data, cursor, commit
                                 )
                                 if sync_event:
                                     sync_event.completed = sync_event.size
-                                return md
+
+                                break
+
                             else:
                                 # Append to upload session.
-                                data = f.read(chunk_size)
+                                data = wrapped_f.read(chunk_size)
                                 self.dbx.files_upload_session_append_v2(data, cursor)
 
-                                uploaded = f.tell()
+                                uploaded = wrapped_f.tell()
                                 cursor.offset = uploaded
 
                                 if sync_event:
@@ -585,10 +609,17 @@ class DropboxClient:
                                 offset = (
                                     session_lookup_error.get_incorrect_offset().correct_offset
                                 )
-                                f.seek(offset)
-                                cursor.offset = f.tell()
+                                wrapped_f.seek(offset)
+                                cursor.offset = wrapped_f.tell()
                             else:
                                 raise exc
+
+        local_hash = hasher.hexdigest()
+
+        if local_hash == md.content_hash:
+            return md
+        else:
+            raise DataCorruptionError("Data corrupted", "Please retry download.")
 
     def remove(self, dbx_path: str, **kwargs) -> files.Metadata:
         """
