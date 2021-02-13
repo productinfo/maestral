@@ -3,6 +3,8 @@
 
 # system imports
 import hashlib
+from io import SEEK_SET
+from typing import BinaryIO, List, Iterator
 
 
 class DropboxContentHasher:
@@ -28,14 +30,14 @@ class DropboxContentHasher:
 
     BLOCK_SIZE = 4 * 1024 * 1024
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._overall_hasher = hashlib.sha256()
         self._block_hasher = hashlib.sha256()
         self._block_pos = 0
 
         self.digest_size = self._overall_hasher.digest_size
 
-    def update(self, new_data):
+    def update(self, new_data: bytes) -> None:
         if self._overall_hasher is None:
             raise RuntimeError(
                 "can't use this object anymore; you already called digest()"
@@ -71,13 +73,13 @@ class DropboxContentHasher:
         self._overall_hasher = None  # Make sure we can't use this object anymore.
         return h
 
-    def digest(self):
+    def digest(self) -> bytes:
         return self._finish().digest()
 
-    def hexdigest(self):
+    def hexdigest(self) -> str:
         return self._finish().hexdigest()
 
-    def copy(self):
+    def copy(self) -> "DropboxContentHasher":
         c = DropboxContentHasher.__new__(DropboxContentHasher)
         c._overall_hasher = self._overall_hasher.copy()
         c._block_hasher = self._block_hasher.copy()
@@ -99,43 +101,46 @@ class StreamHasher:
         assert response.content_hash == locally_computed
     """
 
-    def __init__(self, f, hasher):
+    def __init__(self, f: BinaryIO, hasher: DropboxContentHasher) -> None:
         self._f = f
         self._hasher = hasher
 
-    def close(self):
+    def close(self) -> None:
         return self._f.close()
 
-    def flush(self):
+    def flush(self) -> None:
         return self._f.flush()
 
-    def fileno(self):
+    def fileno(self) -> int:
         return self._f.fileno()
 
-    def tell(self):
+    def tell(self) -> int:
         return self._f.tell()
 
-    def read(self, *args):
-        b = self._f.read(*args)
+    def seek(self, offset: int, whence=SEEK_SET) -> int:
+        return self._f.seek(offset, whence)
+
+    def read(self, size: int = -1) -> bytes:
+        b = self._f.read(size)
         self._hasher.update(b)
         return b
 
-    def write(self, b):
+    def write(self, b: bytes) -> int:
         self._hasher.update(b)
         return self._f.write(b)
 
-    def next(self):
-        b = self._f.next()
+    def readline(self, size: int = -1) -> bytes:
+        b = self._f.readline(size)
         self._hasher.update(b)
         return b
 
-    def readline(self, *args):
-        b = self._f.readline(*args)
-        self._hasher.update(b)
-        return b
-
-    def readlines(self, *args):
-        bs = self._f.readlines(*args)
+    def readlines(self, hint: int = -1) -> List[bytes]:
+        bs = self._f.readlines(hint)
         for b in bs:
             self._hasher.update(b)
-        return b
+        return bs
+
+    def __iter__(self) -> Iterator[bytes]:
+        for b in self._f:
+            self._hasher.update(b)
+            yield b
