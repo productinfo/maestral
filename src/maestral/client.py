@@ -11,6 +11,7 @@ import os.path as osp
 import time
 import logging
 import contextlib
+import functools
 from datetime import datetime, timezone
 from typing import (
     Callable,
@@ -22,6 +23,7 @@ from typing import (
     Iterator,
     TypeVar,
     Optional,
+    cast,
     TYPE_CHECKING,
 )
 
@@ -191,6 +193,36 @@ def convert_api_errors(
             raise ConnectionError("Cannot connect to Dropbox")
         else:
             raise os_to_maestral_error(exc, dbx_path, local_path)
+
+
+def retry_on_error(
+    error_cls: Type[Exception], max_retries: int = 3
+) -> Callable[[FT], FT]:
+    """
+    A decorator to retry a function call if a specified exception occurs.
+
+    :param error_cls: Error type to catch.
+    :param max_retries: Maximum number of retries.
+    """
+
+    def decorator(func: FT) -> FT:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            tries = 0
+
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except error_cls as exc:
+
+                    if tries < max_retries:
+                        tries += 1
+                    else:
+                        raise exc
+
+        return cast(FT, wrapper)
+
+    return decorator
 
 
 class DropboxClient:
@@ -441,6 +473,7 @@ class DropboxClient:
         with convert_api_errors(dbx_path=dbx_path):
             return self.dbx.files_restore(dbx_path, rev)
 
+    @retry_on_error(DataCorruptionError)
     def download(
         self,
         dbx_path: str,
@@ -499,6 +532,7 @@ class DropboxClient:
 
         return md
 
+    @retry_on_error(DataCorruptionError)
     def upload(
         self,
         local_path: str,
