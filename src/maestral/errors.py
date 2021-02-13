@@ -59,6 +59,10 @@ class SyncError(MaestralApiError):
     """Base class for recoverable sync issues."""
 
 
+class DataCorruptionError(MaestralApiError):
+    """Base class for recoverable sync issues."""
+
+
 class InsufficientPermissionsError(SyncError):
     """Raised when accessing a file or folder fails due to insufficient permissions,
     both locally and on Dropbox servers."""
