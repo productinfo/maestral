@@ -7,6 +7,7 @@ import errno
 import time
 import gc
 import ctypes
+from urllib.request import getproxies
 from contextlib import contextmanager
 from functools import wraps
 from queue import Empty, Queue
@@ -796,7 +797,8 @@ class SyncManager:
             self._logger.debug("Connection error", exc_info=True)
             self._logger.info(DISCONNECTED)
             self.stop()
-            self.autostart.set()
+            self.client.proxies = getproxies()  # Update proxy settings.
+            self.autostart.set()  # Schedule autostart on next successful connection.
             self._logger.info(CONNECTING)
         except PathRootError:
             self._logger.debug("API call failed due to path root error", exc_info=True)
