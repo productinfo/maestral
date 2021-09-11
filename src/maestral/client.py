@@ -11,6 +11,7 @@ import os.path as osp
 import time
 import logging
 import contextlib
+from urllib.request import getproxies
 from datetime import datetime, timezone
 from typing import (
     Callable,
@@ -19,6 +20,7 @@ from typing import (
     Type,
     Tuple,
     List,
+    MutableMapping,
     Iterator,
     TypeVar,
     Optional,
@@ -187,8 +189,9 @@ class DropboxClient:
         self._state = MaestralState(config_name)
         self._logger = logging.getLogger(__name__)
 
+        self._proxies = session.proxies if session else getproxies()
+        self._session = session or create_session(proxies=self._proxies)
         self._timeout = timeout
-        self._session = session or create_session()
         self._backoff_until = 0
         self._dbx: Optional[Dropbox] = None
         self._dbx_base: Optional[Dropbox] = None
@@ -403,11 +406,12 @@ class DropboxClient:
     def clone_with_new_session(self) -> "DropboxClient":
         """
         Creates a new copy of the Dropbox client with the same defaults but a new
-        requests session.
+        requests session. Proxies settings will be carried over from the current
+        session.
 
         :returns: A new instance of DropboxClient.
         """
-        return self.clone(session=create_session())
+        return self.clone(session=create_session(proxies=self._proxies))
 
     def update_path_root(self, root_info: Optional[common.RootInfo] = None) -> None:
         """
@@ -466,6 +470,29 @@ class DropboxClient:
         self._logger.debug("Path root type: %s", actual_root_type)
         self._logger.debug("Path root nsid: %s", root_info.root_namespace_id)
         self._logger.debug("User home path: %s", actual_home_path)
+
+    @property
+    def proxies(self) -> MutableMapping[str, str]:
+        """
+        The proxy settings used for requests, given as dictionary where keys denote the
+        protocol and values denote the proxy to use for the protocol. For example:
+
+        >>> proxies = {
+        ...   "http": "http://10.10.1.10:3128",
+        ...   "https": "http://10.10.1.10:1080",
+        ... }
+
+        Proxies will be mainted when cloning the client with a new session using
+        :meth:`clone_with_new_session`.
+        """
+        return self._proxies
+
+    @proxies.setter
+    def proxies(self, proxies: MutableMapping[str, str]) -> None:
+        self._proxies = proxies
+        if self._dbx and self._dbx_base:
+            self._dbx._session.proxies = proxies
+            self._dbx_base._session.proxies = proxies
 
     # ---- SDK wrappers ----------------------------------------------------------------
 
