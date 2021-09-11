@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Union, Tuple
 from urllib.parse import urlparse
+from urllib.request import getproxies
 
 __all__ = [
     "get_ac_state",
@@ -198,9 +199,10 @@ def check_connection(hostname: str, timeout: int = 2) -> bool:
     :returns: Connection availability.
     """
     if urlparse(hostname).scheme not in ["http", "https"]:
-        hostname = "http://" + hostname
+        hostname = "https://" + hostname
+
     try:
-        requests.head(hostname, timeout=timeout)
+        requests.head(hostname, timeout=timeout, proxies=getproxies())
         return True
     except Exception:
         return False
